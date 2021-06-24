@@ -417,6 +417,7 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc, epMgr *endpointma
 		d.egressPolicyManager,
 		option.Config,
 	)
+	nd.RegisterGetK8sNodes(d.k8sWatcher)
 
 	d.redirectPolicyManager.RegisterSvcCache(&d.k8sWatcher.K8sSvcCache)
 	d.redirectPolicyManager.RegisterGetStores(d.k8sWatcher)
@@ -536,13 +537,19 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc, epMgr *endpointma
 			return nil, restoredEndpoints, err
 		}
 
+		// Launch the K8s watchers in parallel as we continue to process other
+		// daemon options.
+		if k8s.IsEnabled() {
+			d.k8sCachesSynced = d.k8sWatcher.InitK8sSubsystem(d.ctx)
+		}
+
 		if option.Config.IPAM == ipamOption.IPAMClusterPool {
 			// Create the CiliumNode custom resource. This call will block until
 			// the custom resource has been created
 			d.nodeDiscovery.UpdateCiliumNodeResource()
 		}
 
-		if err := k8s.WaitForNodeInformation(); err != nil {
+		if err := k8s.WaitForNodeInformation(d.ctx, d.k8sWatcher); err != nil {
 			log.WithError(err).Fatal("Unable to connect to get node spec from apiserver")
 		}
 
@@ -576,14 +583,6 @@ func NewDaemon(ctx context.Context, cancel context.CancelFunc, epMgr *endpointma
 	// which can be modified after the device detection.
 	handleNativeDevices(isKubeProxyReplacementStrict)
 	finishKubeProxyReplacementInit(isKubeProxyReplacementStrict)
-
-	// Launch the K8s watchers in parallel as we continue to process other
-	// daemon options.
-	if k8s.IsEnabled() {
-		bootstrapStats.k8sInit.Start()
-		d.k8sCachesSynced = d.k8sWatcher.InitK8sSubsystem(d.ctx)
-		bootstrapStats.k8sInit.End(true)
-	}
 
 	// BPF masquerade depends on BPF NodePort and require host-reachable svc to
 	// be fully enabled in the tunneling mode, so the following checks should
